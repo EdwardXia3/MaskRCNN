@@ -4,21 +4,25 @@ import json
 import datetime
 import numpy as np
 import skimage.draw
+import cv2
 #import tensorflow as tf
 # Root directory of the project
 from config import Config
 import model as modellib, utils
+import visualize
+import matplotlib.pyplot as plt
 ROOT_DIR = os.path.abspath("../../")
 DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 class LettersConfig(Config):
 
     NAME = 'letters'
 
-    IMAGES_PER_GPU = 2
+    IMAGES_PER_GPU = 1
     NUM_CLASSES = 1 + 1
     STEPS_PER_EPOCH = 30
-    DETECTION_MIN_CONFIDENCE = 0.8
-
+    DETECTION_MIN_CONFIDENCE = 0.85
+    IMAGE_MIN_DIM = 512
+    IMAGE_MAX_DIM = 512
 class LettersDataset(utils.Dataset):
 
     def load_letters(self, dataset_dir, subset):
@@ -27,7 +31,8 @@ class LettersDataset(utils.Dataset):
         subset: Subset to load: train or val
         """
         # Add classes. We have only one class to add.
-        self.add_class("letters", 1, "A")
+        self.add_class("letters", 1, "G")
+
 
         # Train or validation dataset?
         assert subset in ["train", "val"]
@@ -113,6 +118,23 @@ class LettersDataset(utils.Dataset):
             return info["path"]
         else:
             super(self.__class__, self).image_reference(image_id)
+def color_splash(image, mask):
+    """Apply color splash effect.
+    image: RGB image [height, width, 3]
+    mask: instance segmentation mask [height, width, instance count]
+    Returns result image.
+    """
+    # Make a grayscale copy of the image. The grayscale copy still
+    # has 3 RGB channels, though.
+    gray = skimage.color.gray2rgb(skimage.color.rgb2gray(image)) * 255
+    # Copy color pixels from the original color image where mask is set
+    if mask.shape[-1] > 0:
+        # We're treating all instances as one, so collapse the mask into one layer
+        mask = (np.sum(mask, -1, keepdims=True) >= 1)
+        splash = np.where(mask, image, gray).astype(np.uint8)
+    else:
+        splash = gray.astype(np.uint8)
+    return splash
 
 def train(model):
     """Train the model."""
@@ -133,14 +155,38 @@ def train(model):
     print("Training network heads")
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
-                epochs=3, layers='all')
+                epochs=5, layers='heads')
+def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks):
+    """Arrange resutls to match COCO specs in http://cocodataset.org/#format
+    """
+    # If no results, return an empty list
+    if rois is None:
+        return []
 
+    results = []
+    for image_id in image_ids:
+        # Loop through detections
+        for i in range(rois.shape[0]):
+            class_id = class_ids[i]
+            score = scores[i]
+            bbox = np.around(rois[i], 1)
+            mask = masks[:, :, i]
+
+            result = {
+                "image_id": image_id,
+                "category_id": dataset.get_source_class_id(class_id, "coco"),
+                "bbox": [bbox[1], bbox[0], bbox[3] - bbox[1], bbox[2] - bbox[0]],
+                "score": score,
+                "segmentation": maskUtils.encode(np.asfortranarray(mask))
+            }
+            results.append(result)
+    return results
 if __name__ == '__main__':
     import argparse
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(
-        description='Train Mask R-CNN to detect Letterss.')
+        description='Train Mask R-CNN to detect Letters.')
     parser.add_argument("command",
                         metavar="<command>",
                         help="'train' or 'splash'")
@@ -195,24 +241,40 @@ if __name__ == '__main__':
 
     # Select weights file to load
 
-    # if args.weights.lower() == "last":
-    #     # Find last trained weights
-    #weights_path = model.find_last()
-    # elif args.weights.lower() == "imagenet":
-    #     # Start from ImageNet trained weights
-    #     weights_path = model.get_imagenet_weights()
-    # else:
-    #     weights_path = args.weights
+    if args.weights.lower() == "last":
+        # Find last trained weights
+        weights_path = model.find_last()
+    elif args.weights.lower() == "imagenet":
+        # Start from ImageNet trained weights
+        weights_path = model.get_imagenet_weights()
+    else:
+        weights_path = args.weights
 
-    # Load weights
-    #print("Loading weights ", weights_path)
-
-
+    #Load weights
+    print("Loading weights ", weights_path)
     #model.load_weights(weights_path, by_name=True)
-
+    model.load_weights(weights_path, by_name=True, exclude=[ "mrcnn_class_logits", "mrcnn_bbox_fc", "mrcnn_bbox", "mrcnn_mask"])
     # Train or evaluate
     if args.command == "train":
         train(model)
+    elif args.command == "evaluate":
+        dataset = LettersDataset()
+        dataset.load_letters(args.dataset, 'train')
+        dataset.prepare()
+        image = skimage.io.imread(args.image)
+        r = model.detect([image])[0]
+        print(r)
+        visualize.display_instances(
+            image, r['rois'], r['masks'], r['class_ids'],
+            dataset.class_names, r['scores'],
+            show_bbox=False, show_mask=False,
+            title="Predictions")
+        submit_dir = 'C:/Users/EdwardXia/OneDrive/Documents/GT - 2019 Fall/Research/Mask_RCNN/mrcnn'
+        plt.savefig("{}/pred_{:%Y%m%dT%H%M%S}.png".format(submit_dir, datetime.datetime.now()))
+        splash = color_splash(image, r['masks'])
+        file_name = "splash_{:%Y%m%dT%H%M%S}.png".format(datetime.datetime.now())
+        skimage.io.imsave(file_name, splash)
+
     else:
         print("'{}' is not recognized. "
               "Use 'train' or 'splash'".format(args.command))
