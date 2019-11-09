@@ -19,10 +19,10 @@ class LettersConfig(Config):
 
     IMAGES_PER_GPU = 1
     NUM_CLASSES = 1 + 1
-    STEPS_PER_EPOCH = 30
+    STEPS_PER_EPOCH = 60
     DETECTION_MIN_CONFIDENCE = 0.85
-    IMAGE_MIN_DIM = 512
-    IMAGE_MAX_DIM = 512
+    IMAGE_MIN_DIM = 256
+    IMAGE_MAX_DIM = 256
 class LettersDataset(utils.Dataset):
 
     def load_letters(self, dataset_dir, subset):
@@ -155,7 +155,7 @@ def train(model):
     print("Training network heads")
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
-                epochs=5, layers='heads')
+                epochs=15, layers='all')
 def build_coco_results(dataset, image_ids, rois, class_ids, scores, masks):
     """Arrange resutls to match COCO specs in http://cocodataset.org/#format
     """
@@ -252,15 +252,17 @@ if __name__ == '__main__':
 
     #Load weights
     print("Loading weights ", weights_path)
-    #model.load_weights(weights_path, by_name=True)
-    model.load_weights(weights_path, by_name=True, exclude=[ "mrcnn_class_logits", "mrcnn_bbox_fc", "mrcnn_bbox", "mrcnn_mask"])
+
     # Train or evaluate
     if args.command == "train":
+        model.load_weights(weights_path, by_name=True, exclude=[ "mrcnn_class_logits", "mrcnn_bbox_fc", "mrcnn_bbox", "mrcnn_mask"])
         train(model)
     elif args.command == "evaluate":
+        model.load_weights(weights_path, by_name=True)
         dataset = LettersDataset()
         dataset.load_letters(args.dataset, 'train')
         dataset.prepare()
+        print("Images: {}\nClasses: {}".format(len(dataset.image_ids), dataset.class_names))
         image = skimage.io.imread(args.image)
         r = model.detect([image])[0]
         print(r)
@@ -269,7 +271,7 @@ if __name__ == '__main__':
             dataset.class_names, r['scores'],
             show_bbox=False, show_mask=False,
             title="Predictions")
-        submit_dir = 'C:/Users/EdwardXia/OneDrive/Documents/GT - 2019 Fall/Research/Mask_RCNN/mrcnn'
+        submit_dir = 'C:/Users/EdwardXia/Documents/Mask_RCNN/mrcnn'
         plt.savefig("{}/pred_{:%Y%m%dT%H%M%S}.png".format(submit_dir, datetime.datetime.now()))
         splash = color_splash(image, r['masks'])
         file_name = "splash_{:%Y%m%dT%H%M%S}.png".format(datetime.datetime.now())
